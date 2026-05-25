@@ -10,6 +10,10 @@
 
 - Fix website reloading multiple times after update
 
+## Performance improvements
+
+- Improved SIGMETs loading speed
+
 # [2.0.0-alpha.9.3]
 
 ## Production changes

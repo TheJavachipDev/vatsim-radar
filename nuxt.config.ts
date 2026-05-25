@@ -309,6 +309,7 @@ export default defineNuxtConfig({
                 'ol/math.js',
                 'ol/geom.js',
                 'ol/style/Circle.js',
+                'dexie',
             ],
         },
         build: {

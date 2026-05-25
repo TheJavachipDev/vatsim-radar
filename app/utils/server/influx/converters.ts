@@ -34,6 +34,26 @@ export type InfluxGeojson = {
     features?: InfluxGeojsonFeatureCollection[];
 };
 
+const turnsGeojsonCache = new Map<string, { expires: number; data: InfluxGeojson | null }>();
+const turnsGeojsonCacheTtl = 1000 * 10;
+const turnsGeojsonCacheLimit = 500;
+
+function getTurnsGeojsonCacheKey(cid: string, start?: string, full = false) {
+    return `${ cid }:${ start ?? '' }:${ full ? '1' : '0' }`;
+}
+
+function setTurnsGeojsonCache(key: string, data: InfluxGeojson | null) {
+    if (turnsGeojsonCache.size >= turnsGeojsonCacheLimit) {
+        const firstKey = turnsGeojsonCache.keys().next().value;
+        if (firstKey) turnsGeojsonCache.delete(firstKey);
+    }
+
+    turnsGeojsonCache.set(key, {
+        data,
+        expires: Date.now() + turnsGeojsonCacheTtl,
+    });
+}
+
 export function getGeojsonForData(rows: InfluxFlight[], flightPlanStart: string, short = false): InfluxGeojson {
     function getRowColor(row: InfluxFlight) {
         return getFlightRowGroup(row.altitude);
@@ -105,10 +125,18 @@ export function getGeojsonForData(rows: InfluxFlight[], flightPlanStart: string,
 }
 
 export async function getInfluxOnlineFlightTurnsGeojson(cid: string, start?: string, full = false): Promise<InfluxGeojson | null> {
-    const rows = await getInfluxOnlineFlightTurns(cid, start);
-    if (!rows?.features.length) return null;
+    const cacheKey = getTurnsGeojsonCacheKey(cid, start, full);
+    const cached = turnsGeojsonCache.get(cacheKey);
 
-    return getGeojsonForData(rows.features, rows.flightPlanStart, !!start && !full);
+    if (cached && cached.expires > Date.now()) return cached.data;
+
+    const short = !!start && !full;
+    const rows = await getInfluxOnlineFlightTurns(cid, start, short);
+    const data = rows?.features.length ? getGeojsonForData(rows.features, rows.flightPlanStart, short) : null;
+
+    setTurnsGeojsonCache(cacheKey, data);
+
+    return data;
 }
 
 function outputInfluxValue(value: string | number | boolean, isFloat = false) {

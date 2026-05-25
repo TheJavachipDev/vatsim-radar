@@ -162,7 +162,7 @@ export async function getInfluxLatestFlightForCids({
     return pilots.filter(x => x.row);
 }
 
-export async function getInfluxOnlineFlightTurns(cid: string, start?: string) {
+export async function getInfluxOnlineFlightTurns(cid: string, start?: string, downsample = false) {
     const { rows: [row] } = await getInfluxFlightsForCid({
         cid,
         limit: 1,
@@ -178,6 +178,7 @@ export async function getInfluxOnlineFlightTurns(cid: string, start?: string) {
   |> filter(fn: (r) => r["_measurement"] == "data")
   |> filter(fn: (r) => r["cid"] == "${ cid }")
   ${ getFieldsFilter(turnsFields) }
+  ${ downsample ? '|> aggregateWindow(every: 10s, fn: last, createEmpty: false)' : '' }
   |> keep(columns: ["_time", "cid", "_field", "_value"])`;
 
     const rows = await getFlightRows(fluxQuery);

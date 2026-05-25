@@ -11,6 +11,33 @@ export interface VatsimAirportData {
     bookings?: VatsimBooking[];
 }
 
+let cachedBookingsSource: VatsimBooking[] | null = null;
+let cachedBookingsByAirport: Map<string, VatsimBooking[]> = new Map();
+
+function getBookingsByAirport(icao: string) {
+    if (cachedBookingsSource !== radarStorage.vatsimStatic.bookings) {
+        cachedBookingsSource = radarStorage.vatsimStatic.bookings;
+        cachedBookingsByAirport = new Map();
+
+        for (const booking of cachedBookingsSource) {
+            const separatorIndex = booking.atc.callsign.indexOf('_');
+            const airport = separatorIndex === -1 ? booking.atc.callsign : booking.atc.callsign.slice(0, separatorIndex);
+
+            if (!airport) continue;
+
+            let bookings = cachedBookingsByAirport.get(airport);
+            if (!bookings) {
+                bookings = [];
+                cachedBookingsByAirport.set(airport, bookings);
+            }
+
+            bookings.push(booking);
+        }
+    }
+
+    return cachedBookingsByAirport.get(icao) ?? [];
+}
+
 export default defineEventHandler(async (event): Promise<VatsimAirportData | undefined> => {
     const validateAirport = await validateAirportIcao(event, true);
     if (!validateAirport) return;
@@ -21,7 +48,7 @@ export default defineEventHandler(async (event): Promise<VatsimAirportData | und
     const controllersOnly = getQuery(event).requestedDataType === '2';
     const excludeBookings = getQuery(event).excludeBookings === '1';
 
-    const bookings = excludeBookings ? [] : radarStorage.vatsimStatic.bookings.filter(b => b.atc.callsign.split('_')[0] === icao);
+    const bookings = excludeBookings ? [] : getBookingsByAirport(icao);
 
     const data: VatsimAirportData = {
         bookings: bookings,

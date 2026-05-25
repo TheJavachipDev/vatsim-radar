@@ -108,10 +108,61 @@ export function updateVatsimMandatoryDataStorage() {
     radarStorage.vatsim.mandatoryData = newData;
 }
 
-const groundZone = 0.09;
+const groundZone = 0.05;
+type VatSpyAirport = VatSpyData['airports'][number];
 
 function isAircraftOnGround(zone: Coordinate, aircraft: VatsimShortenedAircraft): boolean {
     return aircraft.longitude < zone[0] + groundZone && aircraft.longitude > zone[0] - groundZone && aircraft.latitude < zone[1] + groundZone && aircraft.latitude > zone[1] - groundZone;
+}
+
+function getGroundAirportGridKey(lon: number, lat: number) {
+    return `${ Math.floor(lon / groundZone) }:${ Math.floor(lat / groundZone) }`;
+}
+
+function getGroundAirportGrid(airports: VatSpyData['airports']) {
+    const grid = new Map<string, VatSpyAirport[]>();
+
+    for (const airport of airports) {
+        if (airport.isPseudo) continue;
+
+        const minLonCell = Math.floor((airport.lon - groundZone) / groundZone);
+        const maxLonCell = Math.floor((airport.lon + groundZone) / groundZone);
+        const minLatCell = Math.floor((airport.lat - groundZone) / groundZone);
+        const maxLatCell = Math.floor((airport.lat + groundZone) / groundZone);
+
+        for (let lonCell = minLonCell; lonCell <= maxLonCell; lonCell++) {
+            for (let latCell = minLatCell; latCell <= maxLatCell; latCell++) {
+                const key = `${ lonCell }:${ latCell }`;
+                let cellAirports = grid.get(key);
+                if (!cellAirports) {
+                    cellAirports = [];
+                    grid.set(key, cellAirports);
+                }
+
+                cellAirports.push(airport);
+            }
+        }
+    }
+
+    return grid;
+}
+
+function getClosestGroundAirport(airports: VatSpyAirport[] | null, pilot: VatsimExtendedPilot) {
+    if (!airports?.length) return null;
+    if (airports.length === 1) return airports[0];
+
+    let closestAirport = airports[0];
+    let closestDistance = Infinity;
+
+    for (const airport of airports) {
+        const distance = Math.hypot(pilot.latitude - airport.lat, pilot.longitude - airport.lon);
+        if (distance < closestDistance) {
+            closestAirport = airport;
+            closestDistance = distance;
+        }
+    }
+
+    return closestAirport;
 }
 
 async function updateVatsimExtendedPilots() {
@@ -128,17 +179,19 @@ async function updateVatsimExtendedPilots() {
         origPilot: pilot,
     }));
 
-    const groundPilots: Record<number, VatSpyData['airports']> = {};
+    const groundPilots: Record<number, VatSpyAirport[]> = {};
+    const groundAirportGrid = getGroundAirportGrid(vatspy.data!.airports);
 
-    const filteredPilots = pilotsToProcess.filter(x => x.pilot.groundspeed < 50);
+    for (const { pilot } of pilotsToProcess) {
+        if (pilot.groundspeed >= 50) continue;
 
-    for (const airport of vatspy.data!.airports) {
-        if (airport.isPseudo) continue;
-        const zone = [airport.lon, airport.lat];
-        for (const pilot of filteredPilots) {
-            if (isAircraftOnGround(zone, pilot.pilot)) {
-                groundPilots[pilot.pilot.cid] ??= [];
-                groundPilots[pilot.pilot.cid].push(airport);
+        const nearbyAirports = groundAirportGrid.get(getGroundAirportGridKey(pilot.longitude, pilot.latitude));
+        if (!nearbyAirports?.length) continue;
+
+        for (const airport of nearbyAirports) {
+            if (isAircraftOnGround([airport.lon, airport.lat], pilot)) {
+                groundPilots[pilot.cid] ??= [];
+                groundPilots[pilot.cid].push(airport);
             }
         }
     }
@@ -151,14 +204,7 @@ async function updateVatsimExtendedPilots() {
 
         const groundAirports = groundPilots[extendedPilot.cid] ?? null;
 
-        let groundAirport = (groundAirports && groundAirports?.length > 1)
-            ? groundAirports.sort((a, b) => {
-                const aDistance = Math.sqrt(Math.pow(extendedPilot.latitude - a.lat, 2) + Math.pow(extendedPilot.longitude - a.lon, 2));
-                const bDistance = Math.sqrt(Math.pow(extendedPilot.latitude - b.lat, 2) + Math.pow(extendedPilot.longitude - b.lon, 2));
-
-                return aDistance - bDistance;
-            })[0]
-            : groundAirports?.[0] ?? null;
+        let groundAirport = getClosestGroundAirport(groundAirports, extendedPilot);
 
         if (groundAirports && groundAirports?.length > 1 && (extendedPilot.flight_plan?.departure || extendedPilot.flight_plan?.arrival)) {
             const airport = groundAirports.find(x => (
@@ -258,7 +304,7 @@ async function updateVatsimExtendedPilots() {
 
             if (extendedPilot.stepclimbs?.length &&
                 !extendedPilot.isOnGround &&
-                getPilotTrueAltitude(extendedPilot) + 300 >= extendedPilot.stepclimbs.toSorted((a, b) => a.ft - b.ft)[0].ft
+                pilotAlt >= extendedPilot.stepclimbs.reduce((min, stepclimb) => stepclimb.ft < min ? stepclimb.ft : min, Infinity)
             ) {
                 extendedPilot.status = 'cruising';
             }

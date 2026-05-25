@@ -12,7 +12,7 @@ export default defineEventHandler(async event => {
         return;
     }
 
-    const pilot = radarStorage.vatsim.data?.pilots.find(x => x.cid === +cid);
+    const pilot = radarStorage.vatsim.extendedPilotsMap[cid];
     if (!pilot) {
         handleH3Error({
             event,

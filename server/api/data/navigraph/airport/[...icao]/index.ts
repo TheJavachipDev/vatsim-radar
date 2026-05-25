@@ -14,6 +14,8 @@ import type { Point } from 'geojson';
 import nearestPointOnLine from '@turf/nearest-point-on-line';
 import { isDebug } from '~/utils/server/debug';
 
+type StandGuidanceLineFeatures = AmdbResponseStructure['standguidanceline']['features'];
+
 const allowedProperties: PartialRecord<AmdbLayerName, string[]> = {
     taxiwayintersectionmarking: ['idlin'],
     taxiwayguidanceline: ['color', 'style', 'idlin'],
@@ -27,6 +29,8 @@ const allowedProperties: PartialRecord<AmdbLayerName, string[]> = {
 } satisfies {
     [K in AmdbLayerName]?: (keyof AmdbResponseStructure[K]['features'][number]['properties'])[]
 };
+
+const allowedPropertiesSets = Object.fromEntries(Object.entries(allowedProperties).map(([key, value]) => [key, new Set(value)])) as PartialRecord<AmdbLayerName, Set<string>>;
 
 export default defineEventHandler(async (event): Promise<NavigraphAirportData | undefined> => {
     const user = await findAndRefreshUserByCookie(event);
@@ -75,6 +79,27 @@ export default defineEventHandler(async (event): Promise<NavigraphAirportData | 
     }
 
     if (layout && layout.standguidanceline?.features.length && layout.parkingstandarea?.features.length) {
+        const standLinesByTermref = new Map<string, Map<string, StandGuidanceLineFeatures>>();
+
+        for (const line of layout.standguidanceline.features) {
+            const termref = line.properties.termref ?? '';
+            let linesByStand = standLinesByTermref.get(termref);
+            if (!linesByStand) {
+                linesByStand = new Map();
+                standLinesByTermref.set(termref, linesByStand);
+            }
+
+            for (const ident of line.properties.idstd?.split('_') ?? []) {
+                let lines = linesByStand.get(ident);
+                if (!lines) {
+                    lines = [];
+                    linesByStand.set(ident, lines);
+                }
+
+                lines.push(line);
+            }
+        }
+
         gates = layout.parkingstandarea.features.flatMap(area => {
             const { centroid } = (area.properties as unknown as { centroid: Point });
 
@@ -86,13 +111,19 @@ export default defineEventHandler(async (event): Promise<NavigraphAirportData | 
                 return [];
             }
 
+            const termref = area.properties.termref ?? '';
+            const linesByStand = standLinesByTermref.get(termref);
+            const guidanceLineNames = new Set<string>();
+
             // Generate stands for subgates which have associated standguidancelines
             const guidanceLineGates = subGates.flatMap(ident => {
-                const applicableStandLines = layout.standguidanceline!.features.filter(line => line.properties.termref === area.properties.termref && line.properties.idstd?.split('_').includes(ident));
+                const applicableStandLines = linesByStand?.get(ident) ?? [];
 
                 if (applicableStandLines.length === 0) {
                     return [];
                 }
+
+                guidanceLineNames.add(ident);
 
                 const geometry = multiLineString(applicableStandLines.map(line => line.geometry.coordinates));
 
@@ -109,7 +140,7 @@ export default defineEventHandler(async (event): Promise<NavigraphAirportData | 
                 }];
             });
 
-            const remainingGates = subGates.filter(ident => !guidanceLineGates.find(item => item.name === ident));
+            const remainingGates = subGates.filter(ident => !guidanceLineNames.has(ident));
 
             const coords = centroid.coordinates;
 
@@ -135,12 +166,12 @@ export default defineEventHandler(async (event): Promise<NavigraphAirportData | 
                 }).filter(x => x.geometry);
             }
 
-            const property = allowedProperties[key as AmdbLayerName];
-            if (!property?.length) value.features.forEach(feature => feature.properties = {});
+            const property = allowedPropertiesSets[key as AmdbLayerName];
+            if (!property?.size) value.features.forEach(feature => feature.properties = {});
             else {
                 value.features.forEach(feature => {
                     for (const i in feature.properties) {
-                        if (!property.includes(i)) delete feature.properties[i];
+                        if (!property.has(i)) delete feature.properties[i];
                     }
                 });
             }

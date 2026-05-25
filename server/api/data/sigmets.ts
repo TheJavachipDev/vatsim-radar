@@ -17,7 +17,7 @@ export default defineEventHandler(async event => {
     if (date && new Date(date as string).getTime() < Date.now()) date = undefined;
 
     const key = `sigmet-${ date as string || 'current' }`;
-    const cachedResult = !isDebug() ? null : await getRedisSync(key);
+    const cachedResult = isDebug() ? null : await getRedisSync(key);
     if (cachedResult) {
         try {
             return JSON.parse(cachedResult);
